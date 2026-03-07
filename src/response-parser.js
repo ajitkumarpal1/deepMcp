@@ -2,9 +2,10 @@ const fs = require("fs");
 const path = require("path");
 
 // Applies a SEARCH/REPLACE hunk to file content.
-// 1. Tries exact string match first.
-// 2. Falls back to line-by-line match with trailing whitespace trimmed per line
-//    (DeepSeek almost always strips trailing spaces when writing SEARCH blocks).
+// 1. Exact string match.
+// 2. Line-by-line with trailing whitespace trimmed.
+// 3. Line-by-line with leading + trailing trimmed (handles indent differences).
+// 4. Large-hunk fallback: if SEARCH is most of the file, use REPLACE as full file.
 // Returns the updated content string, or null if no match found.
 function applyHunk(content, search, replace) {
   // 1. Exact match
@@ -12,11 +13,11 @@ function applyHunk(content, search, replace) {
     return content.replace(search, replace);
   }
 
-  // 2. Trailing-whitespace-normalized line-by-line match
   const contentLines = content.split("\n");
   const searchLines = search.split("\n").map((l) => l.trimEnd());
   const replaceLines = replace.split("\n");
 
+  // 2. Trailing-whitespace-normalized line-by-line match
   for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
     let match = true;
     for (let j = 0; j < searchLines.length; j++) {
@@ -30,6 +31,36 @@ function applyHunk(content, search, replace) {
       result.splice(i, searchLines.length, ...replaceLines);
       return result.join("\n");
     }
+  }
+
+  // 3. Line-by-line with leading + trailing trimmed (handles indent / whitespace differences)
+  const searchTrimmed = searchLines.map((l) => l.trim());
+  for (let i = 0; i <= contentLines.length - searchTrimmed.length; i++) {
+    let match = true;
+    for (let j = 0; j < searchTrimmed.length; j++) {
+      if (contentLines[i + j].trim() !== searchTrimmed[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      const result = [...contentLines];
+      result.splice(i, searchTrimmed.length, ...replaceLines);
+      return result.join("\n");
+    }
+  }
+
+  // 4. Large-hunk fallback: SEARCH is a big chunk of the file (e.g. whole file).
+  //    Use REPLACE as the new file content. Threshold 50% so it triggers when
+  //    DeepSeek sends "whole file" as SEARCH and line match failed due to small diffs.
+  const fileLineCount = contentLines.length;
+  const searchLineCount = searchLines.length;
+  const replaceLineCount = replaceLines.length;
+  if (searchLineCount >= fileLineCount * 0.5 && replaceLineCount >= searchLineCount * 0.25) {
+    console.warn(
+      `⚠️  Large hunk (${searchLineCount}/${fileLineCount} lines) — line match failed, using REPLACE as full file`
+    );
+    return replace;
   }
 
   return null; // No match
