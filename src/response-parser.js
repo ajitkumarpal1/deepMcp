@@ -1,6 +1,40 @@
 const fs = require("fs");
 const path = require("path");
 
+// Applies a SEARCH/REPLACE hunk to file content.
+// 1. Tries exact string match first.
+// 2. Falls back to line-by-line match with trailing whitespace trimmed per line
+//    (DeepSeek almost always strips trailing spaces when writing SEARCH blocks).
+// Returns the updated content string, or null if no match found.
+function applyHunk(content, search, replace) {
+  // 1. Exact match
+  if (content.includes(search)) {
+    return content.replace(search, replace);
+  }
+
+  // 2. Trailing-whitespace-normalized line-by-line match
+  const contentLines = content.split("\n");
+  const searchLines = search.split("\n").map((l) => l.trimEnd());
+  const replaceLines = replace.split("\n");
+
+  for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
+    let match = true;
+    for (let j = 0; j < searchLines.length; j++) {
+      if (contentLines[i + j].trimEnd() !== searchLines[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      const result = [...contentLines];
+      result.splice(i, searchLines.length, ...replaceLines);
+      return result.join("\n");
+    }
+  }
+
+  return null; // No match
+}
+
 const EXCLUDE_DIRS = [
   "node_modules",
   ".git",
@@ -162,20 +196,26 @@ class ResponseParser {
           fs.copyFileSync(fullPath, backupPath);
           this._lastBackupPaths[change.filePath] = backupPath;
 
-          let content = fs.readFileSync(fullPath, "utf-8");
+          const rawContent = fs.readFileSync(fullPath, "utf-8");
+          // Normalize line endings so CRLF files match LF patches from DeepSeek
+          const usesCRLF = rawContent.includes("\r\n");
+          let content = rawContent.replace(/\r\n/g, "\n");
           let allFound = true;
 
           for (let i = 0; i < change.hunks.length; i++) {
-            const { search, replace } = change.hunks[i];
-            if (!content.includes(search)) {
+            const search = change.hunks[i].search.replace(/\r\n/g, "\n");
+            const replace = change.hunks[i].replace.replace(/\r\n/g, "\n");
+            const patched = applyHunk(content, search, replace);
+            if (patched === null) {
               console.error(`❌ Hunk ${i + 1} not found in ${change.filePath}`);
               console.error(`   Looking for:\n${search.substring(0, 120)}`);
               allFound = false;
               break;
             }
-            // Replace only first occurrence — most targeted
-            content = content.replace(search, replace);
+            content = patched;
           }
+          // Restore original line endings if file used CRLF
+          if (usesCRLF) content = content.replace(/\n/g, "\r\n");
 
           if (!allFound) {
             // Roll back — don't leave a partially patched file
@@ -254,6 +294,30 @@ class ResponseParser {
       ) {
         const cleanPath = trimmed.replace(/\\/g, "/");
         if (!files.includes(cleanPath)) files.push(cleanPath);
+      }
+    }
+
+    // Strategy 3: DeepSeek writes paths IN PROSE (ignores format entirely).
+    // e.g. "Please provide src/app/products/page.tsx (or wherever...)"
+    //      "Any related components (like src/components/products/ProductCard.tsx)"
+    // Only triggers when Strategies 1+2 found nothing — avoids double-adding.
+    if (files.length === 0) {
+      // Only scan responses that are clearly asking for files (no code blocks present)
+      const looksLikeContextRequest =
+        !response.includes("```") &&
+        /\b(provide|show|share|need|send|give)\b/i.test(response);
+
+      if (looksLikeContextRequest) {
+        // Match paths starting with known root dirs to avoid false positives
+        const inlinePattern =
+          /\b((?:src|app|pages|components|lib|utils|hooks|styles|public)\/[\w\-./ ]*?[\w\-]+\.[a-zA-Z]{2,5})\b/g;
+        let m;
+        while ((m = inlinePattern.exec(response)) !== null) {
+          const p = m[1].replace(/\\/g, "/").trim();
+          if (KNOWN_EXT.test(p) && !files.includes(p)) {
+            files.push(p);
+          }
+        }
       }
     }
 

@@ -100,39 +100,42 @@ class DeepSeekBrowser {
   }
 
   async _waitForResponse() {
-    // Step 1: Find whichever stop button selector is active
-    const stopSel = await this._findActiveStopSelector();
-
-    if (stopSel) {
-      // Step 2: Wait for it to disappear (generation complete)
-      try {
-        await this.page.waitForSelector(stopSel, {
-          state: "detached",
-          timeout: 300000,
-        });
-      } catch {
-        // Timeout — extract whatever is there
-      }
-    } else {
-      // Fallback: try aria-busy spinner
-      const spinnerSel = selectorsConfig.sendingSpinner;
-      if (spinnerSel && spinnerSel.trim()) {
-        try {
-          await this.page.waitForSelector(spinnerSel, { timeout: 10000 });
-          await this.page.waitForSelector(spinnerSel, {
-            state: "detached",
-            timeout: 300000,
-          });
-        } catch {
-          // Last resort: wait for textarea to become interactive again
-          return await this._waitForTextareaReady();
-        }
-      } else {
-        return await this._waitForTextareaReady();
-      }
+    // Step 1: Wait for generation to START — send button becomes disabled.
+    // DeepSeek adds ds-icon-button--disabled + aria-disabled="true" while generating.
+    try {
+      await this.page.waitForFunction(
+        () => !!document.querySelector('.ds-icon-button--disabled[aria-disabled="true"]'),
+        { timeout: 15000, polling: 200 }
+      );
+    } catch {
+      // May have started and finished very quickly — continue
     }
 
-    // Step 3: Check for Continue button (truncated response)
+    // Step 2: Wait for generation to END — ds-icon-button--disabled class removed from send button.
+    // NOTE: Do NOT add a second selector here — other page elements may always have
+    // aria-disabled="true" (emoji pickers, attachment buttons, etc.) and will cause this to hang.
+    try {
+      await this.page.waitForFunction(
+        () => !document.querySelector('.ds-icon-button--disabled[aria-disabled="true"]'),
+        { timeout: 300000, polling: 300 }
+      );
+    } catch {
+      // Timeout — extract whatever is there
+    }
+
+    // Step 3: Stabilization pause — let the last streaming tokens land.
+    await this.page.waitForTimeout(1000);
+
+    // Step 4: Double-check — if button is disabled again, we caught a mid-transition
+    // gap (DeepSeek's thinking→generation handoff). Re-wait in that case.
+    const stillGenerating = await this.page.evaluate(
+      () => !!document.querySelector('.ds-icon-button--disabled[aria-disabled="true"]')
+    );
+    if (stillGenerating) {
+      return await this._waitForResponse();
+    }
+
+    // Step 5: Check for Continue button (truncated response)
     const continueBtn = await this._findContinueButton();
     if (continueBtn) {
       console.log("\n🔄 Continue button found, clicking...");
@@ -141,50 +144,49 @@ class DeepSeekBrowser {
       return await this._waitForResponse();
     }
 
-    // Step 4: Extract final response
-    return await this._extractLastResponse();
-  }
-
-  // Polls all stopButtonSelectors quickly; returns the first one visible, or null.
-  async _findActiveStopSelector() {
-    const selectors = selectorsConfig.stopButtonSelectors;
-    const deadline = Date.now() + 10000;
-    while (Date.now() < deadline) {
-      for (const sel of selectors) {
-        try {
-          const el = await this.page.$(sel);
-          if (el) return sel;
-        } catch {}
-      }
-      await this.page.waitForTimeout(200);
-    }
-    return null;
-  }
-
-  // Last-resort fallback: wait until textarea is interactive (generation done).
-  async _waitForTextareaReady() {
-    try {
-      await this.page.waitForFunction(
-        () => {
-          const ta = document.querySelector("textarea");
-          return ta && !ta.disabled && ta.getAttribute("aria-disabled") !== "true";
-        },
-        { timeout: 300000 }
-      );
-    } catch {}
+    // Step 6: Extract final response
     return await this._extractLastResponse();
   }
 
   async _findContinueButton() {
     const selectors = selectorsConfig.continueSelectors;
-    for (const sel of selectors) {
-      try {
-        const btn = await this.page.waitForSelector(sel, { timeout: 200 });
-        if (btn) return btn;
-      } catch {
-        continue;
+    // Poll every 200ms for up to 3 seconds.
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      // Try Playwright CSS/text selectors first
+      for (const sel of selectors) {
+        try {
+          const btn = await this.page.$(sel);
+          if (btn) return btn;
+        } catch {}
       }
+
+      // DOM fallback using page.$$() — proper ElementHandles, no serialization issues.
+      // Checks visible innerText only (not textContent) to avoid matching hidden aria text.
+      // Length cap of 30 chars avoids matching prose that happens to contain "continue".
+      const allBtns = await this.page.$$('button, [role="button"]');
+      for (const btn of allBtns) {
+        try {
+          const text = (await btn.innerText()).trim().toLowerCase();
+          if (text.length <= 30 && (text.includes("continue") || text.includes("继续"))) {
+            return btn;
+          }
+        } catch {}
+      }
+
+      await this.page.waitForTimeout(200);
     }
+
+    // Debug: log visible button texts so we can see what's on screen
+    const buttonTexts = await this.page.evaluate(() =>
+      [...document.querySelectorAll('button, [role="button"]')]
+        .map((b) => (b.innerText || "").trim())
+        .filter((t) => t.length > 0)
+    );
+    if (buttonTexts.length > 0) {
+      console.log("🔍 No Continue button found. Buttons on page:", buttonTexts.slice(0, 15));
+    }
+
     return null;
   }
 

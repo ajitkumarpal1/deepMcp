@@ -191,6 +191,27 @@ class MCPOrchestrator {
       this.parser.preview(changes);
     }
 
+    // Warn about large SEARCH blocks — DeepSeek often sends the entire file as SEARCH
+    // instead of a targeted patch, which almost always fails to match.
+    const largePatchFiles = changes.filter(
+      (c) => c.type === "patch" && c.hunks.some((h) => h.search.split("\n").length > 100)
+    );
+    if (largePatchFiles.length > 0) {
+      console.log(`\n⚠️  Large SEARCH block in: ${largePatchFiles.map((c) => c.filePath).join(", ")}`);
+      console.log("   DeepSeek sent the whole file instead of a targeted patch — this will likely fail.");
+      const fix = await this._prompt("   Ask DeepSeek to redo with targeted patches? (y=yes, n=apply anyway): ");
+      if (fix.toLowerCase().trim() === "y") {
+        const followUp =
+          "The SEARCH block you sent was the entire file. That is wrong.\n" +
+          "Please redo using TARGETED SEARCH/REPLACE blocks — only include the specific lines that change, NOT the whole file.\n" +
+          "Keep each SEARCH block to the minimum lines needed to uniquely identify the location.";
+        response = await this.browser.sendMessage(followUp, { newChat: false });
+        this._saveLog(response);
+        changes = this.parser.parse(response);
+        this.parser.preview(changes);
+      }
+    }
+
     const confirm = await this._prompt(
       `\n⚡ Apply ${changes.length} file change(s)? (y/n/dry): `
     );
@@ -277,9 +298,10 @@ class MCPOrchestrator {
 
   // Searches the project to auto-answer DeepSeek's questions.
   // Returns a string with relevant findings, or null if nothing useful found.
+  // NOTE: preference-check moved to AFTER project search — e.g. "preferred styling
+  // approach?" looks like a preference question but is answered by package.json.
   _tryAutoAnswer(question) {
-    // Never auto-answer user-preference questions — they need real user input
-    if (this._isUserPreferenceQuestion(question)) return null;
+    const q = question.toLowerCase();
     const stopWords = new Set([
       "what", "which", "is", "are", "the", "a", "an", "how", "do", "does",
       "you", "using", "use", "being", "project", "this", "that", "with",
@@ -346,13 +368,35 @@ class MCPOrchestrator {
             .filter((line) => keywords.some((kw) => line.toLowerCase().includes(kw)));
           if (relevantLines.length > 0) {
             results.push(`${relPath}:\n${relevantLines.slice(0, 5).join("\n")}`);
-            break; // One match is enough for the broad fallback
+            break;
           }
         } catch {}
       }
     }
 
-    return results.length > 0 ? results.join("\n\n") : null;
+    if (results.length > 0) return results.join("\n\n");
+
+    // Project files had no answer — try built-in heuristics for common tech-stack
+    // questions so we never bother the user with things like "what CSS framework?".
+    if (q.includes("styl") || q.includes("css") || q.includes("framework")) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        if (deps["tailwindcss"])        return "Tailwind CSS (detected in package.json)";
+        if (deps["styled-components"])  return "styled-components (detected in package.json)";
+        if (deps["@emotion/react"])     return "Emotion CSS-in-JS (detected in package.json)";
+        if (deps["sass"] || deps["node-sass"]) return "SCSS/Sass (detected in package.json)";
+      } catch {}
+      return "Use the same styling approach already used in the existing component files.";
+    }
+
+    // For any remaining preference-style question we couldn't answer from files,
+    // return a sensible fallback instead of asking the user.
+    if (this._isUserPreferenceQuestion(question)) {
+      return "Not specified — follow the patterns and conventions already in the codebase.";
+    }
+
+    return null;
   }
 
   _saveLog(response) {
