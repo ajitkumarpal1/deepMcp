@@ -1,0 +1,4 @@
+.session/
+logs/
+*.bak.*
+node_modules/

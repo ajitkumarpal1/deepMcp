@@ -1,0 +1,13 @@
+{
+  "name": "deepseek-mcp",
+  "version": "1.0.0",
+  "description": "MCP-like layer for DeepSeek browser chat with codebase context",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "run": "node index.js"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2"
+  }
+}
