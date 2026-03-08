@@ -1,5 +1,7 @@
 // src/fuzzy-search.js
 // Fuzzy SEARCH/REPLACE — 5 strategies, in order of strictness
+const logger = require('./logger');
+const config = require('./config');
 
 function fuzzyApplyHunk(content, search, replace) {
 
@@ -47,17 +49,17 @@ function fuzzyApplyHunk(content, search, replace) {
     if (score > bestScore) { bestScore = score; bestIdx = i; }
   }
 
-  // Only use fuzzy match if confidence > 70%
-  if (bestScore > 0.70 && bestIdx !== -1) {
-    console.warn(`⚠️  Fuzzy match: ${Math.round(bestScore * 100)}% confidence`);
+  // Only use fuzzy match if confidence meets threshold
+  if (bestScore > config.FUZZY_MIN_CONFIDENCE && bestIdx !== -1) {
+    logger.warn(`Fuzzy match applied at ${Math.round(bestScore * 100)}% confidence`);
     const out = [...cLines];
     out.splice(bestIdx, sLines.length, ...rLines);
     return { result: out.join('\n'), strategy: `fuzzy-${Math.round(bestScore * 100)}%` };
   }
 
-  // Strategy 5: Large hunk fallback (>50% of file = use REPLACE as full)
-  if (sLines.length >= cLines.length * 0.5) {
-    console.warn('⚠️  Large hunk: using REPLACE as full file');
+  // Strategy 5: Large hunk fallback (search constitutes >LARGE_HUNK_RATIO of file → use replace as full file)
+  if (sLines.length >= cLines.length * config.LARGE_HUNK_RATIO) {
+    logger.warn('Large hunk detected: using REPLACE content as full file');
     return { result: replace, strategy: 'full-replace' };
   }
 

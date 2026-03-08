@@ -1,36 +1,19 @@
-const fs = require("fs");
-const path = require("path");
+const fs     = require("fs");
+const path   = require("path");
+const config = require("./config");
 
 const INCLUDE_EXTENSIONS = [
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".css",
-  ".scss",
-  ".json",
-  ".html",
-  ".md",
-  ".py",
+  ".js", ".jsx", ".ts", ".tsx",
+  ".css", ".scss", ".json", ".html", ".md", ".py",
 ];
 
 const INCLUDE_FILENAMES = [".env.example"];
 
-const EXCLUDE_DIRS = [
-  "node_modules",
-  ".git",
-  ".next",
-  "dist",
-  "build",
-  ".cache",
-  "coverage",
-  ".session",
-];
+const EXCLUDE_DIRS     = config.EXCLUDE_DIRS;
+const MAX_FILE_SIZE_KB = config.MAX_FILE_SIZE_KB;
+const MAX_TOTAL_CHARS  = config.MAX_TOTAL_CHARS;
 
-const MAX_FILE_SIZE_KB = 100;
-const MAX_TOTAL_CHARS = 80000;
-
-const ENTRY_POINT_NAMES = ["index", "app", "main"];
+const ENTRY_POINT_NAMES   = ["index", "app", "main"];
 const PRIORITY_EXTENSIONS = [".js", ".ts", ".jsx", ".tsx"];
 
 function parseGitignore(projectPath) {
@@ -261,7 +244,7 @@ class ContextBuilder {
     const keywords = userQuery ? this._extractQueryKeywords(userQuery) : [];
     const forcePaths = userQuery ? this._extractExplicitFilePaths(userQuery) : [];
     const filesToInclude = keywords.length > 0
-      ? this._selectRelevantFiles(keywords, 12, forcePaths)
+      ? this._selectRelevantFiles(keywords, config.MAX_FILES_PER_QUERY, forcePaths)
       : [...this.files].sort((a, b) => filePriority(a, this.projectPath) - filePriority(b, this.projectPath));
 
     // Cache: only reuse if same query and files unchanged

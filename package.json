@@ -1,14 +1,37 @@
 {
   "name": "deepseek-mcp",
   "version": "1.0.0",
-  "description": "MCP-like layer for DeepSeek browser chat with codebase context",
+  "description": "MCP server and CLI layer for DeepSeek browser chat with codebase context",
   "main": "index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "deepseek-mcp": "./mcp-entry.js"
+  },
   "scripts": {
     "start": "node index.js",
-    "run": "node index.js",
-    "mcp": "node mcp-entry.js"
+    "mcp": "node mcp-entry.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/ tests/",
+    "lint:fix": "eslint src/ tests/ --fix",
+    "format": "prettier --write src/ tests/"
   },
   "dependencies": {
     "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "jest": "^29.7.0",
+    "prettier": "^3.8.1"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
   }
 }

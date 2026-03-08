@@ -1,8 +1,9 @@
-const { chromium } = require("playwright");
-const path = require("path");
+const { chromium }    = require("playwright");
+const config          = require("./config");
 const selectorsConfig = require("./selectors.config");
 
-const SESSION_PATH = path.join(__dirname, "../.session");
+// Session stored in user home directory — never inside the project root.
+const SESSION_PATH = config.SESSION_PATH;
 
 class DeepSeekBrowser {
   constructor() {
@@ -63,7 +64,7 @@ class DeepSeekBrowser {
     if (this._onLoginWait) {
       await this._onLoginWait();
     } else {
-      console.log("👉 Browser mein login karo, phir Enter dabao terminal mein...");
+      console.log("Log in to DeepSeek in the browser, then press Enter in this terminal...");
       await new Promise((resolve) => {
         process.stdin.once("data", resolve);
       });
@@ -101,12 +102,11 @@ class DeepSeekBrowser {
   }
 
   async _waitForResponse() {
-    const marker = selectorsConfig.responseCompleteMarker;
-    const markerTimeout = 300000; // 5 min
-    const pollMs = 1500;
+    const marker   = selectorsConfig.responseCompleteMarker;
+    const pollMs   = config.POLL_INTERVAL_MS;
 
     // Primary: wait for DeepSeek to output [RESPONSE_COMPLETE] at the end so we never assume done too early.
-    const deadline = Date.now() + markerTimeout;
+    const deadline = Date.now() + config.RESPONSE_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const continueBtn = await this._findContinueButton();
       if (continueBtn) {

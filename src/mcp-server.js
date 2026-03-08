@@ -1,5 +1,8 @@
 // src/mcp-server.js
-const { getToolsList, callTool } = require('./tools');
+const { getToolsList, callTool, validateToolArgs } = require('./tools');
+
+// In MCP mode all diagnostics MUST go to stderr — stdout is the JSON-RPC channel.
+const log = (...a) => process.stderr.write('[MCP] ' + a.join(' ') + '\n');
 
 class MCPServer {
   constructor(projectPath) {
@@ -19,8 +22,7 @@ class MCPServer {
         if (trimmed) this._handleMessage(trimmed);
       }
     });
-    // stderr only — stdout is for JSON-RPC!
-    process.stderr.write(`[MCP] Server ready. Project: ${this.projectPath}\n`);
+    log(`Server ready. Project: ${this.projectPath}`);
   }
 
   _send(obj) {
@@ -32,6 +34,10 @@ class MCPServer {
   }
 
   async _handleMessage(raw) {
+    if (process.env.DEBUG) {
+      log(`→ ${raw.substring(0, 120)}`);
+    }
+
     let req;
     try { req = JSON.parse(raw); }
     catch { return this._error(null, -32700, 'Parse error'); }
@@ -53,7 +59,7 @@ class MCPServer {
           break;
 
         case 'initialized':
-          // notification — no response needed
+          // Notification — no response required
           break;
 
         case 'tools/list':
@@ -64,7 +70,18 @@ class MCPServer {
           break;
 
         case 'tools/call': {
-          const { name, arguments: args } = params;
+          const { name, arguments: args } = params || {};
+
+          if (!name) {
+            return this._error(id, -32602, 'Missing "name" in tools/call params');
+          }
+
+          // Validate required arguments against the tool's inputSchema
+          const validationError = validateToolArgs(name, args || {});
+          if (validationError) {
+            return this._error(id, -32602, validationError);
+          }
+
           const data = await callTool(name, args || {}, this.context);
           this._send({
             jsonrpc: '2.0', id,
@@ -86,6 +103,7 @@ class MCPServer {
           this._error(id, -32601, `Method not found: ${method}`);
       }
     } catch (err) {
+      log(`Error handling "${method}": ${err.message}`);
       this._error(id, -32603, err.message);
     }
   }
