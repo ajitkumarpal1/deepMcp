@@ -257,10 +257,17 @@ class ResponseParser {
     const files = [];
     const questions = [];
 
-    // Strategy 1: structured NEED_CONTEXT block (ideal case)
-    const blockMatch = response.match(/NEED_CONTEXT:\s*\n([\s\S]*?)(?:\n\n|$)/);
+    // Strategy 1: structured NEED_CONTEXT block (ideal case).
+    //
+    // IMPORTANT: use the LAST occurrence, not the first.
+    // DeepSeek sometimes echoes the system prompt (which contains an EXAMPLE
+    // NEED_CONTEXT block with fake paths like "path/to/file.js"). The real
+    // request always appears AFTER the echoed instructions.
+    const lastIdx = response.lastIndexOf("NEED_CONTEXT:");
+    const blockToParse = lastIdx >= 0 ? response.slice(lastIdx) : response;
+    const blockMatch = blockToParse.match(/NEED_CONTEXT:\s*\n([\s\S]*?)(?:\n\n|$)/);
     const linesToScan = blockMatch
-      ? blockMatch[1].split("\n")   // only scan inside the block
+      ? blockMatch[1].split("\n")   // only scan inside the real block
       : response.split("\n");       // fallback: scan entire response
 
     const KNOWN_EXT = /\.(tsx?|jsx?|css|scss|json|html|md|py|env|yaml|yml|sh)$/i;
@@ -271,7 +278,9 @@ class ResponseParser {
       if (trimmed.startsWith("FILE:")) {
         // Strip trailing prose like "(or any theme provider)" — take only path token
         const rawPath = trimmed.slice(5).trim().split(/\s+/)[0];
-        if (rawPath && rawPath.includes(".")) files.push(rawPath);
+        // Skip placeholder/example paths that DeepSeek uses in its format instructions
+        const isExample = !rawPath || rawPath.startsWith("path/to/") || rawPath === "path/to/file.js";
+        if (!isExample && rawPath.includes(".")) files.push(rawPath);
 
       } else if (trimmed.startsWith("QUESTION:")) {
         const q = trimmed.slice(9).trim();

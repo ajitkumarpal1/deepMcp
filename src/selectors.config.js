@@ -8,11 +8,17 @@
 module.exports = {
   /** DeepSeek is instructed to end every full response with this exact line. We wait for it so we never assume done too early. */
   responseCompleteMarker: "[RESPONSE_COMPLETE]",
-  /** Selectors for the SEND button (when visible). Fallback when marker is not found within timeout. */
+  /**
+   * Selectors used ONLY to detect when generation has finished (fallback when
+   * [RESPONSE_COMPLETE] marker is not seen). NOT used for clicking — clicking
+   * is handled by _clickSendButton() via DOM traversal from the textarea.
+   * Update if DeepSeek changes their UI (verify with F12 → Elements panel).
+   */
   sendButtonSelectors: [
     '[aria-label="Send"]',
+    '[aria-label="send"]',
     'button[type="submit"]',
-    '.ds-icon-button--sizing-container[role="button"]:not([aria-label="Stop"])',
+    '.ds-icon-button--sizing-container[role="button"][aria-disabled="false"]',
   ],
   /** Selectors for "generating in progress" — send button has this while generating. */
   generatingSelector: '.ds-icon-button--disabled[aria-disabled="true"]',
