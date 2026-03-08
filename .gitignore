@@ -1,4 +1,30 @@
-.session/
-logs/
-*.bak.*
+# Dependencies
 node_modules/
+
+# Browser session — contains auth cookies/tokens for your DeepSeek account
+.session/
+
+# Runtime logs
+logs/
+
+# Backup files created by the apply tool
+*.bak.*
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# Undo state (stored in user home by default, but ignore local copies too)
+undo-state.json
+
+# Editor / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+build/
+coverage/
