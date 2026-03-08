@@ -13,6 +13,7 @@ class DeepSeekBrowser {
 
   async launch(options = {}) {
     this._onLoginWait = options.onLoginWait || null;
+    this._askUserResponseCompleted = options.askUserResponseCompleted || null;
     console.log("🚀 Launching browser...");
 
     try {
@@ -100,52 +101,86 @@ class DeepSeekBrowser {
   }
 
   async _waitForResponse() {
-    // Step 1: Wait for generation to START — send button becomes disabled.
-    // DeepSeek adds ds-icon-button--disabled + aria-disabled="true" while generating.
-    try {
-      await this.page.waitForFunction(
-        () => !!document.querySelector('.ds-icon-button--disabled[aria-disabled="true"]'),
-        { timeout: 15000, polling: 200 }
-      );
-    } catch {
-      // May have started and finished very quickly — continue
+    const marker = selectorsConfig.responseCompleteMarker;
+    const markerTimeout = 300000; // 5 min
+    const pollMs = 1500;
+
+    // Primary: wait for DeepSeek to output [RESPONSE_COMPLETE] at the end so we never assume done too early.
+    const deadline = Date.now() + markerTimeout;
+    while (Date.now() < deadline) {
+      const continueBtn = await this._findContinueButton();
+      if (continueBtn) {
+        console.log("\n🔄 Continue button found, clicking...");
+        await continueBtn.click();
+        await this.page.waitForTimeout(1500);
+        continue;
+      }
+      const raw = await this._extractLastResponse();
+      if (raw && raw.includes(marker)) {
+        return this._stripResponseCompleteMarker(raw, marker);
+      }
+      await this.page.waitForTimeout(pollMs);
     }
 
-    // Step 2: Wait for generation to END — ds-icon-button--disabled class removed from send button.
-    // NOTE: Do NOT add a second selector here — other page elements may always have
-    // aria-disabled="true" (emoji pickers, attachment buttons, etc.) and will cause this to hang.
-    try {
-      await this.page.waitForFunction(
-        () => !document.querySelector('.ds-icon-button--disabled[aria-disabled="true"]'),
-        { timeout: 300000, polling: 300 }
-      );
-    } catch {
-      // Timeout — extract whatever is there
-    }
-
-    // Step 3: Stabilization pause — let the last streaming tokens land.
-    await this.page.waitForTimeout(1000);
-
-    // Step 4: Double-check — if button is disabled again, we caught a mid-transition
-    // gap (DeepSeek's thinking→generation handoff). Re-wait in that case.
-    const stillGenerating = await this.page.evaluate(
-      () => !!document.querySelector('.ds-icon-button--disabled[aria-disabled="true"]')
-    );
-    if (stillGenerating) {
+    // Timeout: marker not seen. If user prompt is set, ask; else fall back to send-button.
+    if (this._askUserResponseCompleted) {
+      const done = await this._askUserResponseCompleted();
+      if (done) {
+        const continueBtn = await this._findContinueButton();
+        if (continueBtn) {
+          await continueBtn.click();
+          await this.page.waitForTimeout(1500);
+          return await this._waitForResponse();
+        }
+        const raw = await this._extractLastResponse();
+        return this._stripResponseCompleteMarker(raw || "", marker);
+      }
       return await this._waitForResponse();
     }
 
-    // Step 5: Check for Continue button (truncated response)
+    // Fallback: send button visible and no Continue.
+    const sendSelectors = selectorsConfig.sendButtonSelectors;
+    try {
+      await this.page.waitForFunction(
+        ({ sendSelectors }) => {
+          const isVisible = (el) => el && el.offsetParent !== null;
+          const sendVisible = sendSelectors.some((sel) => {
+            try {
+              const el = document.querySelector(sel);
+              return isVisible(el);
+            } catch {
+              return false;
+            }
+          });
+          const hasContinue = [...document.querySelectorAll("button, [role=\"button\"]")].some(
+            (b) => {
+              const t = (b.innerText || "").trim().toLowerCase();
+              return t.length <= 30 && (t.includes("continue") || t.includes("继续"));
+            }
+          );
+          return sendVisible && !hasContinue;
+        },
+        { sendSelectors },
+        { timeout: 60000, polling: 300 }
+      );
+    } catch {
+      // use whatever we have
+    }
+    await this.page.waitForTimeout(1000);
     const continueBtn = await this._findContinueButton();
     if (continueBtn) {
-      console.log("\n🔄 Continue button found, clicking...");
       await continueBtn.click();
       await this.page.waitForTimeout(1500);
       return await this._waitForResponse();
     }
+    const raw = await this._extractLastResponse();
+    return this._stripResponseCompleteMarker(raw || "", marker);
+  }
 
-    // Step 6: Extract final response
-    return await this._extractLastResponse();
+  _stripResponseCompleteMarker(text, marker) {
+    if (!text || !marker) return text;
+    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return text.replace(new RegExp("\\s*" + escaped + "\\s*$"), "").trimEnd();
   }
 
   async _findContinueButton() {
@@ -192,7 +227,7 @@ class DeepSeekBrowser {
 
   async _extractLastResponse() {
     const candidates = selectorsConfig.responseContentSelectors;
-    return await this.page.evaluate((candidates) => {
+    const raw = await this.page.evaluate((candidates) => {
       for (const sel of candidates) {
         const els = document.querySelectorAll(sel);
         if (els.length > 0) {
@@ -201,6 +236,19 @@ class DeepSeekBrowser {
       }
       return "";
     }, candidates);
+    return this._stripUIButtonLabels(raw);
+  }
+
+  /** Remove DeepSeek UI labels (Copy, Download, Run, etc.) that get included in innerText. */
+  _stripUIButtonLabels(text) {
+    if (!text || typeof text !== "string") return text;
+    const buttonOnly = /^\s*(Copy|Download|Run|复制|下载|运行)(\s+(Copy|Download|Run|复制|下载|运行))*\s*$/i;
+    return text
+      .split("\n")
+      .filter((line) => !buttonOnly.test(line))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 
   async close() {

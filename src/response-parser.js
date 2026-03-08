@@ -1,70 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-
-// Applies a SEARCH/REPLACE hunk to file content.
-// 1. Exact string match.
-// 2. Line-by-line with trailing whitespace trimmed.
-// 3. Line-by-line with leading + trailing trimmed (handles indent differences).
-// 4. Large-hunk fallback: if SEARCH is most of the file, use REPLACE as full file.
-// Returns the updated content string, or null if no match found.
-function applyHunk(content, search, replace) {
-  // 1. Exact match
-  if (content.includes(search)) {
-    return content.replace(search, replace);
-  }
-
-  const contentLines = content.split("\n");
-  const searchLines = search.split("\n").map((l) => l.trimEnd());
-  const replaceLines = replace.split("\n");
-
-  // 2. Trailing-whitespace-normalized line-by-line match
-  for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
-    let match = true;
-    for (let j = 0; j < searchLines.length; j++) {
-      if (contentLines[i + j].trimEnd() !== searchLines[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      const result = [...contentLines];
-      result.splice(i, searchLines.length, ...replaceLines);
-      return result.join("\n");
-    }
-  }
-
-  // 3. Line-by-line with leading + trailing trimmed (handles indent / whitespace differences)
-  const searchTrimmed = searchLines.map((l) => l.trim());
-  for (let i = 0; i <= contentLines.length - searchTrimmed.length; i++) {
-    let match = true;
-    for (let j = 0; j < searchTrimmed.length; j++) {
-      if (contentLines[i + j].trim() !== searchTrimmed[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      const result = [...contentLines];
-      result.splice(i, searchTrimmed.length, ...replaceLines);
-      return result.join("\n");
-    }
-  }
-
-  // 4. Large-hunk fallback: SEARCH is a big chunk of the file (e.g. whole file).
-  //    Use REPLACE as the new file content. Threshold 50% so it triggers when
-  //    DeepSeek sends "whole file" as SEARCH and line match failed due to small diffs.
-  const fileLineCount = contentLines.length;
-  const searchLineCount = searchLines.length;
-  const replaceLineCount = replaceLines.length;
-  if (searchLineCount >= fileLineCount * 0.5 && replaceLineCount >= searchLineCount * 0.25) {
-    console.warn(
-      `⚠️  Large hunk (${searchLineCount}/${fileLineCount} lines) — line match failed, using REPLACE as full file`
-    );
-    return replace;
-  }
-
-  return null; // No match
-}
+const { fuzzyApplyHunk } = require("./fuzzy-search");
 
 const EXCLUDE_DIRS = [
   "node_modules",
@@ -126,11 +62,40 @@ class ResponseParser {
       while ((match = pattern.exec(response)) !== null) {
         const filePath = normalizePathToOs(match[1]);
         const content = match[2].replace(/\n+$/, "");
-        // Don't override a patch already captured for this file
         if (!fileMap[filePath]) {
           fileMap[filePath] = { filePath, type: "full", content };
         }
       }
+    }
+
+    // 3. Fallback: "filename on own line" then optional "lang" line then code (no ```). Common when AI ignores ### and ```.
+    const filenameOnlyLine = /^\s*([\w/.\\\-]+\.\w+)\s*$/;
+    const knownLangs = /^\s*(html|css|javascript|js|ts|tsx|jsx|json|md|py|scss|xml)\s*$/i;
+    const lines = response.split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const fileLine = lines[i];
+      const m = fileLine.match(filenameOnlyLine);
+      if (m) {
+        const filePath = normalizePathToOs(m[1]);
+        if (fileMap[filePath]) {
+          i++;
+          continue;
+        }
+        i++;
+        if (i < lines.length && knownLangs.test(lines[i])) i++;
+        const contentLines = [];
+        while (i < lines.length && !lines[i].match(filenameOnlyLine) && lines[i] !== "[RESPONSE_COMPLETE]") {
+          contentLines.push(lines[i]);
+          i++;
+        }
+        const content = contentLines.join("\n").replace(/\n+$/, "");
+        if (content.length > 0) {
+          fileMap[filePath] = { filePath, type: "full", content };
+        }
+        continue;
+      }
+      i++;
     }
 
     return Object.values(fileMap);
@@ -236,14 +201,14 @@ class ResponseParser {
           for (let i = 0; i < change.hunks.length; i++) {
             const search = change.hunks[i].search.replace(/\r\n/g, "\n");
             const replace = change.hunks[i].replace.replace(/\r\n/g, "\n");
-            const patched = applyHunk(content, search, replace);
-            if (patched === null) {
-              console.error(`❌ Hunk ${i + 1} not found in ${change.filePath}`);
-              console.error(`   Looking for:\n${search.substring(0, 120)}`);
+            const result = fuzzyApplyHunk(content, search, replace);
+            if (result === null) {
+              console.error(`❌ Hunk ${i + 1}: no match (tried 5 strategies)`);
               allFound = false;
               break;
             }
-            content = patched;
+            console.log(`  ✓ Hunk ${i + 1} applied via: ${result.strategy}`);
+            content = result.result;
           }
           // Restore original line endings if file used CRLF
           if (usesCRLF) content = content.replace(/\n/g, "\r\n");

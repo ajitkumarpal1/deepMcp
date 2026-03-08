@@ -5,6 +5,7 @@ const readline = require("readline");
 const DeepSeekBrowser = require("./deepseek-browser");
 const ContextBuilder = require("./context-builder");
 const ResponseParser = require("./response-parser");
+const selectorsConfig = require("./selectors.config");
 const { suggestCommands } = require("./post-apply-runner");
 
 class MCPOrchestrator {
@@ -33,6 +34,10 @@ class MCPOrchestrator {
 
     await this.browser.launch({
       onLoginWait: () => this._prompt("Press Enter after logging in... "),
+      askUserResponseCompleted: async () => {
+        const r = await this._prompt("Is the response completed? (y/n): ");
+        return r.trim().toLowerCase().startsWith("y");
+      },
     });
     console.log("\n✅ MCP Layer ready! Same chat is ON (one conversation until you stop). Type 'multi' to toggle.\n");
   }
@@ -135,6 +140,9 @@ class MCPOrchestrator {
       console.log(`\n🔄 DeepSeek needs more context (round ${round + 1}/${MAX_ROUNDS}):`);
 
       let followUp = "Here is the additional context you requested:\n\n";
+      if (contextRequests.files.length > 0) {
+        followUp += "Each file is provided in the format: ### path then a code block. Use this for SEARCH/REPLACE.\n\n";
+      }
 
       for (const filePath of contextRequests.files) {
         const fullPath = path.join(this.projectPath, filePath.replace(/\//g, path.sep));
@@ -160,7 +168,7 @@ class MCPOrchestrator {
         }
       }
 
-      followUp += "Now please provide the code changes using the SEARCH/REPLACE format.";
+      followUp += `Now please provide the code changes using the SEARCH/REPLACE format. You MUST end your response with exactly this as the last line (no other text after it): ${selectorsConfig.responseCompleteMarker} — without it we cannot detect that your response is done.`;
 
       response = await this.browser.sendMessage(followUp, { newChat: false });
       if (!response || !response.trim()) {
@@ -204,7 +212,8 @@ class MCPOrchestrator {
         const followUp =
           "The SEARCH block you sent was the entire file. That is wrong.\n" +
           "Please redo using TARGETED SEARCH/REPLACE blocks — only include the specific lines that change, NOT the whole file.\n" +
-          "Keep each SEARCH block to the minimum lines needed to uniquely identify the location.";
+          "Keep each SEARCH block to the minimum lines needed to uniquely identify the location.\n" +
+          `You MUST end your response with exactly this as the last line: ${selectorsConfig.responseCompleteMarker}`;
         response = await this.browser.sendMessage(followUp, { newChat: false });
         this._saveLog(response);
         changes = this.parser.parse(response);
@@ -245,7 +254,8 @@ class MCPOrchestrator {
         const cont = await this._prompt("\nAI may have more files to create. Continue in same chat? (y/Enter to skip): ");
         if (cont.toLowerCase().trim() !== "y") break;
         const followUp =
-          "Those files were applied successfully.\nPlease continue and provide the remaining files in the same SEARCH/REPLACE or full-file format.";
+          "Those files were applied successfully.\nPlease continue and provide the remaining files in the same SEARCH/REPLACE or full-file format.\n" +
+          `You MUST end your response with exactly this as the last line: ${selectorsConfig.responseCompleteMarker}`;
         currentResponse = await this.browser.sendMessage(followUp, { newChat: false });
         this._saveLog(currentResponse);
         const moreChanges = this.parser.parse(currentResponse);

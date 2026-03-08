@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "run": "node index.js"
+    "run": "node index.js",
+    "mcp": "node mcp-entry.js"
   },
   "dependencies": {
     "playwright": "^1.58.2"

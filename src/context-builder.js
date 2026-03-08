@@ -345,6 +345,17 @@ class ContextBuilder {
 2. For NEW files use a full code block.
 3. If you need more context before coding, use NEED_CONTEXT block ONLY — no code at all.
 4. Do NOT mix formats. Do NOT add prose before or after code blocks.
+5. EVERY response MUST end with exactly this line on its own (no other text after it): [RESPONSE_COMPLETE]
+   — No exceptions. Even if you write "I'll continue with more files" or need another message later, still put [RESPONSE_COMPLETE] on the last line of THIS message. Without it our system waits forever and cannot proceed.
+
+CONTEXT REQUEST CONTRACT (when you need file content):
+- To request files: output NEED_CONTEXT: then one line per file: FILE: path/to/file.js (use forward slashes, one path per line). Optional: QUESTION: ... for non-file questions.
+- We only parse FILE: lines; use this format so we can send you the exact file content.
+- When we reply, we send each requested file in this exact format so you can use it for SEARCH/REPLACE:
+  ### path/to/file.js
+  \`\`\`
+  <full file content>
+  \`\`\`
 
 ---
 
@@ -361,6 +372,8 @@ ${userQuery}
 - For NEW files that don't exist yet, use a full code block.
 - If you need to create many files, split across messages. After each batch say "I'll continue with more files..." and the user will ask you to continue.
 - If you need more information, use NEED_CONTEXT format — do NOT guess.
+- End EVERY message with exactly this line on its own as the very last line: [RESPONSE_COMPLETE]
+  (Required. If you forget, the tool will not detect that your response is done.)
 
 ## RESPONSE FORMAT (MANDATORY — deviating will break the automated apply tool)
 
@@ -389,12 +402,18 @@ Rules:
 - Only include the lines that change, not the whole file.
 - Paths must use forward slashes (e.g. src/components/App.tsx).
 
-For NEW files:
+For NEW files (we can create files from scratch in empty projects — use this format):
 
 ### path/to/newfile.js
 \`\`\`js
 [complete file content]
 \`\`\`
+
+- Each new file MUST use the line "### filename" then a line with \`\`\` then the full content then \`\`\`.
+- You can create index.html, styles.css, script.js, etc. in one response; just use the ### and code block for each.
+
+---
+REMINDER: The last line of your reply must be exactly: [RESPONSE_COMPLETE]
 `;
   }
 
